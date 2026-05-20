@@ -7,8 +7,9 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from pathlib import Path
-# 💡 修正：符合 2026 最新 Google GenAI SDK 規範
 from google import genai
+# 💡 核心修正：引入金融數據專用的 yfinance 套件
+import yfinance as yf
 
 # ── 載入設定 ──────────────────────────────────────────────
 CONFIG_PATH = Path("topic_config.yaml")
@@ -20,7 +21,6 @@ EMAIL_USER = os.environ["EMAIL_USER"]
 EMAIL_PASS = os.environ["EMAIL_PASS"]
 RECEIVER_EMAIL = os.environ["RECEIVER_EMAIL"]
 
-# 💡 修正：使用新版 Client 初始化方式
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 TODAY = datetime.now().strftime("%Y-%m-%d")
@@ -28,15 +28,14 @@ HISTORY_FILE = Path("history.csv")
 REPORT_FILE = Path("report.html")
 
 
-# ── 抓取數據 ──────────────────────────────────────────────
+# ── 抓取數據（升級強效抗阻擋版） ─────────────────────────────
 def fetch_indicator_data(indicator: dict) -> dict:
     url = indicator["data_source"]["url"]
-    method = indicator["data_source"]["access_method"]
-    notes = indicator["data_source"].get("notes", "")
+    metric = indicator["metric"]
     max_delay = indicator["data_source"].get("max_delay_days", 30)
 
     result = {
-        "metric": indicator["metric"],
+        "metric": metric,
         "url": url,
         "fetched_at": TODAY,
         "max_delay_days": max_delay,
@@ -47,22 +46,45 @@ def fetch_indicator_data(indicator: dict) -> dict:
     }
 
     try:
-        if method == "scrape":
-            from bs4 import BeautifulSoup
-            resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"})
+        # 🎯 第一重防線：如果發現是 Yahoo Finance 的網址，直接啟用 yfinance 後台 API 強制破防
+        if "yahoo.com" in url or any(k in metric for k in ["0050", "2330", "TLT"]):
+            ticker_symbol = ""
+            if "0050" in url or "0050" in metric: ticker_symbol = "0050.TW"
+            elif "2330" in url or "2330" in metric: ticker_symbol = "2330.TW"
+            elif "TLT" in url or "TLT" in metric: ticker_symbol = "TLT"
+            
+            if ticker_symbol:
+                ticker = yf.Ticker(ticker_symbol)
+                hist = ticker.history(period="5d")  # 讀取近5日歷史，避免週末沒數據
+                if not hist.empty:
+                    latest_data = hist.iloc[-1]
+                    latest_date = hist.index[-1].strftime("%Y-%m-%d")
+                    result["content"] = f"商品代號: {ticker_symbol}, 最新數據基準日: {latest_date}, 收盤價: {latest_data['Close']:.2f}, 最高價: {latest_data['High']:.2f}, 最低價: {latest_data['Low']:.2f}"
+                    return result
+
+        # 🎯 第二重防線：針對其他網頁（如房價指數），全面升級為擬真擬人化的瀏覽器 Headers 標頭
+        from bs4 import BeautifulSoup
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Cache-Control": "max-age=0"
+        }
+        resp = requests.get(url, timeout=15, headers=headers)
+        
+        if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
-            result["content"] = soup.get_text(separator=" ", strip=True)[:2000]
-
-        elif method == "api" or method == "csv":
-            resp = requests.get(url, timeout=15)
-            result["content"] = resp.text[:2000]
-
+            # 濾除網頁中的干擾腳本與樣式標籤
+            for script in soup(["script", "style"]):
+                script.extract()
+            result["content"] = soup.get_text(separator=" ", strip=True)[:3000]
         else:
-            result["error"] = f"無法識別的存取方式：{method}"
+            result["error"] = f"伺服器回應錯誤碼: {resp.status_code}"
+            result["content"] = "此網站防火牆啟動了防爬蟲機制，網頁文字被封鎖阻擋。"
 
     except Exception as e:
         result["error"] = str(e)
-        result["content"] = f"抓取失敗：{str(e)}\n備註：{notes}"
+        result["content"] = f"抓取例外錯誤: {str(e)}"
 
     return result
 
@@ -129,7 +151,6 @@ def analyze_with_ai(config: dict, fetch_results: list) -> dict:
 }}
 """
 
-    # 💡 修正：使用新版 client.models.generate_content 語法與 gemini-2.5-flash 模型
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=prompt,
