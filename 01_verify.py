@@ -10,6 +10,7 @@ from pathlib import Path
 import google.generativeai as genai
 
 # ── 載入設定 ──────────────────────────────────────────────
+# 💡 修正：直接讀取根目錄的設定檔
 CONFIG_PATH = Path("topic_config.yaml")
 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
@@ -23,6 +24,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 TODAY = datetime.now().strftime("%Y-%m-%d")
+# 💡 修正：直接生成在根目錄
 HISTORY_FILE = Path("history.csv")
 REPORT_FILE = Path("report.html")
 
@@ -134,8 +136,7 @@ def analyze_with_ai(config: dict, fetch_results: list) -> dict:
     try:
         text_content = response.text.strip()
         if text_content.startswith("```json"):
-            text_content = text_content.split("
-```json")[1].split("```")[0].strip()
+            text_content = text_content.split("```json")[1].split("```")[0].strip()
         return json.loads(text_content)
     except Exception:
         return {
@@ -211,7 +212,7 @@ def generate_html_report(config: dict, fetch_results: list, analysis: dict):
         hist = indicator_histories.get(iid, [])
 
         rows_html = ""
-        for h in reversed(hist):  # 最新紀錄排在最上面
+        for h in reversed(hist):
             delay_badge = f'<span class="badge warning">{h["delay_warning"]}</span>' if h["delay_warning"] else ""
             verdict_class = {"符合": "good", "不符合": "bad", "尚未明朗": "neutral"}.get(h["verdict"], "neutral")
             rows_html += f"""
