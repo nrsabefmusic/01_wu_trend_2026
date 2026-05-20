@@ -1,0 +1,4 @@
+run_date,indicator_id,metric,data_date,data_url,delay_warning,verdict,trend,conclusion,overall_credibility
+2026-05-20,1,元大台灣50 (0050) / 台積電 (2330) 股價,unknown,https://finance.yahoo.com/quote/0050.TW,,尚未明朗,原始內容摘要為空，無法取得最新股價數據。,無法取得元大台灣50/台積電的最新股價數據，趨勢不明。,尚未明朗
+2026-05-20,2,台灣六都房價指數,unknown,https://www.macromicro.me/charts/25227/taiwan-house-price-index,,尚未明朗,原始內容摘要顯示技術問題，無法取得房價指數數據。,因網頁技術問題無法獲取台灣六都房價指數數據，趨勢不明。,尚未明朗
+2026-05-20,3,TLT 長天期美債 ETF 價格,unknown,https://finance.yahoo.com/quote/TLT,,尚未明朗,原始內容摘要顯示網頁錯誤，無法取得TLT長天期美債ETF價格。,網頁顯示錯誤，無法取得TLT長天期美債ETF最新價格數據，趨勢不明。,尚未明朗
