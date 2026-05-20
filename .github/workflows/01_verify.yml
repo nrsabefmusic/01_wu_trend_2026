@@ -20,10 +20,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install google-genai requests pyyaml beautifulsoup4
+          # 💡 核心修正：加裝 yfinance 專業財經庫，確保數據不被阻擋
+          pip install google-genai requests pyyaml beautifulsoup4 yfinance
 
       - name: Run verify script
-        working-directory: ./  # 💡 強制在專案最外層根目錄執行
+        working-directory: ./
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
@@ -36,7 +37,6 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          # 💡 確保自動產生的檔案能正確被偵測並推回根目錄
           git add history.csv report.html
           git diff --staged --quiet || git commit -m "📊 更新驗證報告 (01_wu_trend_2026) $(date +'%Y-%m-%d')"
           git push
