@@ -2,3 +2,6 @@ run_date,indicator_id,metric,data_date,data_url,delay_warning,verdict,trend,conc
 2026-05-20,1,元大台灣50 (0050) / 台積電 (2330) 股價,unknown,https://finance.yahoo.com/quote/0050.TW,,尚未明朗,原始內容摘要為空，無法取得最新股價數據。,無法取得元大台灣50/台積電的最新股價數據，趨勢不明。,尚未明朗
 2026-05-20,2,台灣六都房價指數,unknown,https://www.macromicro.me/charts/25227/taiwan-house-price-index,,尚未明朗,原始內容摘要顯示技術問題，無法取得房價指數數據。,因網頁技術問題無法獲取台灣六都房價指數數據，趨勢不明。,尚未明朗
 2026-05-20,3,TLT 長天期美債 ETF 價格,unknown,https://finance.yahoo.com/quote/TLT,,尚未明朗,原始內容摘要顯示網頁錯誤，無法取得TLT長天期美債ETF價格。,網頁顯示錯誤，無法取得TLT長天期美債ETF最新價格數據，趨勢不明。,尚未明朗
+2026-05-20,1,元大台灣50 (0050) / 台積電 (2330) 股價,2026-05-20,https://finance.yahoo.com/quote/0050.TW,,尚未明朗,目前數據為單一收盤價，無法判斷自言論發布以來的大盤股票趨勢走向。,元大台灣50於2026年5月20日收盤價為92.95，短期趨勢尚未明朗。,尚未明朗
+2026-05-20,2,台灣六都房價指數,unknown,https://www.macromicro.me/charts/25227/taiwan-house-price-index,,尚未明朗,網站防火牆阻擋數據抓取，無法判斷房價指數趨勢。,台灣六都房價指數因網站數據無法取得，目前無法進行驗證。,尚未明朗
+2026-05-20,3,TLT 長天期美債 ETF 價格,2026-05-19,https://finance.yahoo.com/quote/TLT,,尚未明朗,目前數據為單一收盤價，無法判斷自言論發布以來的長天期美債價格趨勢走向。,TLT長天期美債ETF於2026年5月19日收盤價為83.02，短期趨勢尚未明朗。,尚未明朗
