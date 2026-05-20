@@ -29,7 +29,6 @@ jobs:
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
         run: |
-          cd 01_wu_trend_2026
           python 01_verify.py
 
       - name: Commit and push report
