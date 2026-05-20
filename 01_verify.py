@@ -7,10 +7,10 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from pathlib import Path
-import google.generativeai as genai
+# 💡 修正：符合 2026 最新 Google GenAI SDK 規範
+from google import genai
 
 # ── 載入設定 ──────────────────────────────────────────────
-# 💡 修正：直接讀取根目錄的設定檔
 CONFIG_PATH = Path("topic_config.yaml")
 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
@@ -20,11 +20,10 @@ EMAIL_USER = os.environ["EMAIL_USER"]
 EMAIL_PASS = os.environ["EMAIL_PASS"]
 RECEIVER_EMAIL = os.environ["RECEIVER_EMAIL"]
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+# 💡 修正：使用新版 Client 初始化方式
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 TODAY = datetime.now().strftime("%Y-%m-%d")
-# 💡 修正：直接生成在根目錄
 HISTORY_FILE = Path("history.csv")
 REPORT_FILE = Path("report.html")
 
@@ -115,22 +114,26 @@ def analyze_with_ai(config: dict, fetch_results: list) -> dict:
 - 整體說明（2-3句）
 
 請用以下 JSON 格式回答，不要有任何其他文字：
-{
+{{
   "indicators": [
-    {
+    {{
       "id": 1,
       "data_date": "YYYY-MM-DD 或 unknown",
       "trend": "趨勢說明",
       "verdict": "符合 / 不符合 / 尚未明朗",
       "conclusion": "一句話結論"
-    }
+    }}
   ],
   "overall_credibility": "高 / 中 / 低 / 尚未明朗",
   "overall_summary": "整體說明"
-}
+}}
 """
 
-    response = model.generate_content(prompt)
+    # 💡 修正：使用新版 client.models.generate_content 語法與 gemini-2.5-flash 模型
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+    )
 
     import json
     try:
