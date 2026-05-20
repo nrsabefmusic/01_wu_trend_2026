@@ -35,7 +35,7 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add 01_wu_trend_2026/report.html 01_wu_trend_2026/history.csv
+          git add history.csv report.html
           git diff --staged --quiet || git commit -m "📊 更新驗證報告 (01_wu_trend_2026) $(date +'%Y-%m-%d')"
           git push
         env:
