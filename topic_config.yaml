@@ -1,60 +1,59 @@
 # 驗證任務設定檔
 task:
-  id: "01"
-  name: "wu_trend_2026"
-  created: "2026-05-20"
-  source_statement: "大通膨與灰犀牛逼近，優質股票與核心房產抗通膨，不看好傳統債券配置。"
-  source_person: "吳淡如"
-  source_platform: "Podcast《人生實用商學院》"
-  source_date: "2026-05-15"
-  source_type: "財經 / 投資理財"
-  tracking_reason: "本任務追蹤吳淡如於 2026 年 5 月在 Podcast 提出的大通膨時代資產配置觀點。她主張傳統股債平衡已失靈，並強調優質股票與核心房產具備抗通膨能力，同時看空傳統債券。我們將透過市場硬數據，長期驗證大盤股票、核心地段房價與長天期美債的實質走勢，透視此類名人財經言論的背離程度與可信度。"
-  tracking_until: "2027-05-20"
-  report_url: "https://cai-zongyi.github.io/news-osint-verifier/01_wu_trend_2026/report.html"
+ id: "01"
+ name: "wu_trend_2026"
+ created: "2026-05-20"
+ source_statement: "大通膨與灰犀牛逼近，優質股票與核心房產抗通膨，不看好傳統債券配置。"
+ source_person: "吳淡如"
+ source_platform: "Podcast《人生實用商學院》"
+ source_date: "2026-05-15"
+ source_type: "財經 / 投資理財"
+ tracking_reason: "本任務追蹤吳淡如於 2026 年 5 月在 Podcast 提出的大通膨時代資產配置觀點。她主張傳統股債平衡已失靈，並強調優質股票與核心房產具備抗通膨能力，同時看空傳統債券。我們將透過市場硬數據，長期驗證大盤股票、核心地段房價與長天期美債的實質走勢，透視此類名人財經言論的背離程度與可信度。"
+ tracking_until: "2027-05-20"
 
 indicators:
-  - id: 1
-    prediction: "優質股票能對抗通膨持續上漲"
-    metric: "元大台灣50 (0050) / 台積電 (2330) 股價"
-    direction: "up"
-    data_source:
-      name: "Yahoo Finance"
-      url: "https://finance.yahoo.com/quote/0050.TW"
-      access_method: "scrape"
-      update_frequency: "daily"
-      max_delay_days: 2
-      notes: "追蹤大盤核心資產走勢"
+ - id: 1
+   prediction: "優質股票能對抗通膨持續上漲"
+   metric: "元大台灣50 (0050) / 台積電 (2330) 股價"
+   direction: "up"
+   data_source:
+     name: "Yahoo Finance"
+     url: "https://finance.yahoo.com/quote/0050.TW"
+     access_method: "yfinance"
+     update_frequency: "daily"
+     max_delay_days: 2
+     notes: "追蹤大盤核心資產走勢"
 
-  - id: 2
-    prediction: "核心房產具備保值與抗通膨效果"
-    metric: "台灣六都房價指數"
-    direction: "up"
-    data_source:
-      name: "財經M平方"
-      url: "https://www.macromicro.me/charts/25227/taiwan-house-price-index"
-      access_method: "scrape"
-      update_frequency: "monthly"
-      max_delay_days: 60
-      notes: "主要城市精華區房價趨勢"
+ - id: 2
+   prediction: "核心房產具備保值與抗通膨效果"
+   metric: "台灣六都房價指數"
+   direction: "up"
+   data_source:
+     name: "台北市政府地政局 Open Data"
+     url: "https://data.taipei/api/dataset/954911b5-896d-4ae1-9ebe-87c4ba8a191e/resource/3210976b-f578-483c-8853-3ceec3796877/download"
+     access_method: "csv"
+     update_frequency: "quarterly"
+     max_delay_days: 120
+     notes: "台北市全市住宅價格季指數，免帳號，季度更新"
 
-  - id: 3
-    prediction: "傳統債券失去避險與配置功能"
-    metric: "TLT 長天期美債 ETF 價格"
-    direction: "down"
-    data_source:
-      name: "Yahoo Finance"
-      url: "https://finance.yahoo.com/quote/TLT"
-      access_method: "scrape"
-      update_frequency: "daily"
-      max_delay_days: 2
-      notes: "全球無風險資產與傳統股債平衡核心"
+ - id: 3
+   prediction: "傳統債券失去避險與配置功能"
+   metric: "TLT 長天期美債 ETF 價格"
+   direction: "down"
+   data_source:
+     name: "Yahoo Finance"
+     url: "https://finance.yahoo.com/quote/TLT"
+     access_method: "yfinance"
+     update_frequency: "daily"
+     max_delay_days: 2
+     notes: "全球無風險資產與傳統股債平衡核心"
 
 schedule:
-  frequency: "weekly_3"
-  cron: "0 20 * * 1,3,5"
-  timezone_note: "每週二、四、六台灣時間早上 04:00 (UTC 20:00)"
+ frequency: "weekly_3"
+ cron: "0 20 * * 1,3,5"
+ timezone_note: "每週二、四、六台灣時間早上 04:00 (UTC 20:00)"
 
 output:
-  method: email
-  receiver: "${{ secrets.RECEIVER_EMAIL }}"
-  subject_prefix: "[wu_trend_2026] 驗證報告"
+ method: email
+ receiver: "${{ secrets.RECEIVER_EMAIL }}"
+ subject_prefix: "[wu_trend_2026] 驗證報告"
