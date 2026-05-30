@@ -56,4 +56,4 @@ schedule:
 output:
  method: email
  receiver: "${{ secrets.RECEIVER_EMAIL }}"
- subject_prefix: "[wu_trend_2026] 驗證報告"
+ subject_prefix: "週二四六_04:00[wu_trend_2026] 驗證報告"
