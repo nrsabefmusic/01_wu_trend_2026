@@ -1,44 +1,43 @@
 name: 01 wu_trend_2026 - 驗證任務
 
 on:
-  workflow_dispatch:  # 手動觸發
-  schedule:
-    - cron: '0 20 * * 1,3,5'  # 每週二、四、六台灣時間早上 04:00 (UTC 20:00)
+ workflow_dispatch:  # 手動觸發
+ schedule:
+   - cron: '0 20 * * 1,3,5'  # 每週二、四、六台灣時間早上 04:00 (UTC 20:00)
 
 jobs:
-  run-verify:
-    runs-on: ubuntu-latest
+ run-verify:
+   runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+   steps:
+     - name: Checkout repo
+       uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+     - name: Set up Python
+       uses: actions/setup-python@v5
+       with:
+         python-version: '3.11'
 
-      - name: Install dependencies
-        run: |
-          # 💡 核心修正：加裝 yfinance 專業財經庫，確保數據不被阻擋
-          pip install google-genai requests pyyaml beautifulsoup4 yfinance
+     - name: Install dependencies
+       run: |
+         pip install google-genai requests pyyaml beautifulsoup4 yfinance matplotlib
 
-      - name: Run verify script
-        working-directory: ./
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-          RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
-        run: |
-          python 01_verify.py
+     - name: Run verify script
+       working-directory: ./
+       env:
+         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+         EMAIL_USER: ${{ secrets.EMAIL_USER }}
+         EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+         RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+       run: |
+         python 01_verify.py
 
-      - name: Commit and push report
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add history.csv report.html
-          git diff --staged --quiet || git commit -m "📊 更新驗證報告 (01_wu_trend_2026) $(date +'%Y-%m-%d')"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+     - name: Commit and push report
+       run: |
+         git config --global user.name "github-actions[bot]"
+         git config --global user.email "github-actions[bot]@users.noreply.github.com"
+         git add history.csv report.html
+         git diff --staged --quiet || git commit -m "📊 更新驗證報告 (01_wu_trend_2026) $(date +'%Y-%m-%d')"
+         git push
+       env:
+         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
