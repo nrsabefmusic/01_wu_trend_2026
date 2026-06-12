@@ -7,7 +7,7 @@ import requests
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from google import genai
 import yfinance as yf
@@ -15,6 +15,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+
+# validator.py 與本腳本放在同一目錄（repo 根目錄）
+from validator import validate_output, build_validation_block, VALIDATOR_VERSION
 
 # ── 載入設定 ──────────────────────────────────────────────
 CONFIG_PATH = Path("topic_config.yaml")
@@ -26,29 +29,40 @@ EMAIL_USER = os.environ["EMAIL_USER"]
 EMAIL_PASS = os.environ["EMAIL_PASS"]
 RECEIVER_EMAIL = os.environ["RECEIVER_EMAIL"]
 
-TODAY = datetime.now().strftime("%Y-%m-%d")
+TZ_TAIWAN = timezone(timedelta(hours=8))
+TODAY = datetime.now(TZ_TAIWAN).strftime("%Y-%m-%d")
 HISTORY_FILE = Path("history.csv")
 REPORT_FILE = Path("report.html")
 
 # ── Gemini 自動偵測可用模型 ────────────────────────────────
+# gemini-1.5-flash 已永久下架（404），不放進清單
+PREFERRED_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-2.0-flash",
+]
+
 def get_workable_model(client):
+    """實際試打確認模型可用（quota 耗盡或 503 都會 fallback）"""
     import time
-    priority = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
-    for model in priority:
+    for model in PREFERRED_MODELS:
         try:
             response = client.models.generate_content(model=model, contents="hi")
             if response and response.text:
                 print(f"  ↳ 可用模型：{model}")
                 return model
         except Exception as e:
-            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+            e_str = str(e)
+            if "429" in e_str or "RESOURCE_EXHAUSTED" in e_str:
                 print(f"  ↳ {model} 額度不足，5秒後嘗試下一個...")
                 time.sleep(5)
-                continue
+            elif "503" in e_str or "UNAVAILABLE" in e_str:
+                print(f"  ↳ {model} 暫時不可用（503），10秒後嘗試下一個...")
+                time.sleep(10)
             else:
-                print(f"  ↳ {model} 發生錯誤：{e}")
-                continue
-    return None
+                print(f"  ↳ {model} 不可用：{e}，嘗試下一個...")
+    print("所有模型均不可用，使用最後備援")
+    return "gemini-2.0-flash-lite"
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 GEMINI_MODEL = get_workable_model(client)
@@ -68,14 +82,12 @@ def fetch_yfinance(ticker_symbol: str, metric_name: str) -> dict:
     }
     try:
         ticker = yf.Ticker(ticker_symbol)
-        # auto_adjust=False 避免調整後價格造成 NaN；period="1mo" 確保有足夠資料
         hist = ticker.history(period="1mo", auto_adjust=False)
         if hist.empty:
             result["error"] = f"{ticker_symbol} 無歷史數據"
             result["content"] = result["error"]
             return result
 
-        # 取最後一筆有效收盤價
         close_series = hist["Close"].dropna()
         if close_series.empty:
             result["error"] = f"{ticker_symbol} Close 欄位全為 NaN"
@@ -101,8 +113,6 @@ def fetch_taipei_housing_index() -> dict:
     """
     抓取台北市住宅價格季指數（全市）
     來源：台北市政府地政局 open data CSV，免帳號
-    URL：https://data.taipei/api/dataset/954911b5.../download
-    格式：宅價格季指數類別, 期別(114Q4), 季指數, 季指數變動率, ...
     """
     metric_name = "台北市住宅價格季指數（全市）"
     result = {
@@ -120,25 +130,23 @@ def fetch_taipei_housing_index() -> dict:
     try:
         resp = requests.get(url, timeout=20)
         resp.raise_for_status()
-        # 解析 CSV，找「全市」最新一筆
-        content = resp.content.decode("utf-8-sig")  # 去除 BOM
+        content = resp.content.decode("utf-8-sig")
         reader = csv.DictReader(io.StringIO(content))
         latest_row = None
         for row in reader:
             category = row.get("宅價格季指數類別", "").strip()
             if category == "全市":
-                latest_row = row  # CSV 是時間正序，最後一筆就是最新
+                latest_row = row
         if latest_row is None:
             result["error"] = "找不到「全市」資料列"
             result["content"] = result["error"]
             return result
 
-        period = latest_row.get("期別", "").strip()       # e.g. "114Q4"
-        index_val = latest_row.get("季指數", "").strip()  # e.g. "126.88"
+        period = latest_row.get("期別", "").strip()
+        index_val = latest_row.get("季指數", "").strip()
         change = latest_row.get("季指數變動率", "").strip()
         price_total = latest_row.get("標準住宅總價（新台幣萬元）", "").strip()
 
-        # 期別轉換：114Q4 → 2025Q4 → 約 2025-12-31
         try:
             roc_year = int(period[:3])
             quarter = int(period[4])
@@ -178,9 +186,8 @@ def fetch_all_indicators(config: dict) -> list:
             r = fetch_yfinance("TLT", metric)
         elif "房價" in metric or "住宅" in metric:
             r = fetch_taipei_housing_index()
-            r["metric"] = metric  # 保留設定檔中的名稱
+            r["metric"] = metric
         else:
-            # 預設走原有的 requests 爬蟲
             url = indicator["data_source"]["url"]
             r = {
                 "metric": metric,
@@ -339,7 +346,6 @@ def generate_charts_base64(config: dict, history: list) -> dict:
     indicators = config["indicators"]
     charts = {}
 
-    # 英文縮寫對照
     label_map = {
         "0050": "0050.TW Price",
         "2330": "2330.TW Price",
@@ -352,18 +358,16 @@ def generate_charts_base64(config: dict, history: list) -> dict:
         iid = str(ind["id"])
         metric = ind["metric"]
 
-        # 決定圖表標籤
         chart_label = metric
         for key, label in label_map.items():
             if key in metric:
                 chart_label = label
                 break
 
-        # 從 history 撈這個指標的數值
         rows = [r for r in history if str(r.get("indicator_id")) == iid
                 and r.get("value") and r.get("run_date")]
         if len(rows) < 2:
-            continue  # 資料不足，不畫圖
+            continue
 
         try:
             dates = [datetime.strptime(r["run_date"], "%Y-%m-%d") for r in rows]
@@ -411,7 +415,6 @@ def generate_html_report(config: dict, fetch_results: list,
             indicator_histories[iid] = []
         indicator_histories[iid].append(row)
 
-    # 英文縮寫對照說明（圖表下方補充）
     chart_legend = {
         "0050": "0050.TW Price = 元大台灣50 收盤價（TWD）",
         "2330": "2330.TW Price = 台積電 收盤價（TWD）",
@@ -431,7 +434,6 @@ def generate_html_report(config: dict, fetch_results: list,
         prediction = next((x.get("prediction", "") for x in indicators
                            if str(x["id"]) == iid), "")
 
-        # 歷史表格（最新在上）
         rows_html = ""
         for h in reversed(hist[-30:]):
             delay_badge = (f'<span class="badge warning">{h["delay_warning"]}</span>'
@@ -447,7 +449,6 @@ def generate_html_report(config: dict, fetch_results: list,
               <td>{h.get('conclusion','')}</td>
             </tr>"""
 
-        # 折線圖
         chart_html = ""
         if iid in charts:
             legend_text = ""
@@ -485,6 +486,18 @@ def generate_html_report(config: dict, fetch_results: list,
     credibility_class = {"高": "good", "中": "neutral", "低": "bad",
                          "尚未明朗": "neutral"}.get(
         analysis.get("overall_credibility", ""), "neutral")
+
+    # ── 組裝驗證結果區塊 ──────────────────────────────────────
+    data_dates = {
+        r["metric"]: r["data_date"] if not r["error"] else None
+        for r in fetch_results
+    }
+    validation = validate_output(
+        data_dates=data_dates,
+        today=TODAY,
+        max_date_diff_days=120,   # 季度數據容許較長落後
+    )
+    validation_html = build_validation_block(validation)
 
     html = f"""<!DOCTYPE html>
 <html lang="zh-TW">
@@ -527,12 +540,13 @@ def generate_html_report(config: dict, fetch_results: list,
   </style>
 </head>
 <body>
-  <div style="background:#f3f4f6;border-radius:6px;padding:10px 16px;
-              margin-bottom:16px;font-size:0.78rem;color:#6b7280;line-height:2;">
-    <strong style="color:#9ca3af;letter-spacing:0.05em;">任務資訊</strong><br>
-    Repo：01_wu_trend_2026　
-    資料夾：/（根目錄）　
-    腳本：01_verify.py　
+
+  <!-- ===== 任務資訊區塊 ===== -->
+  <div style="margin:0 0 16px;padding:14px 18px;background:#f7f7f8;border-radius:6px;font-size:12px;color:#888;line-height:2;">
+    📋 <b style="color:#999;">任務資訊</b><br>
+    Repo：01_wu_trend_2026<br>
+    資料夾：/（根目錄）<br>
+    腳本：01_verify.py<br>
     設定檔：topic_config.yaml
   </div>
 
@@ -565,6 +579,9 @@ def generate_html_report(config: dict, fetch_results: list,
   {indicator_rows}
 
   <p class="updated">最後驗證時間：{TODAY}</p>
+
+  {validation_html}
+
 </body>
 </html>"""
 
@@ -580,7 +597,7 @@ def send_email(config: dict, html_content: str, analysis: dict,
     task = config["task"]
     indicators = config["indicators"]
 
-    # 檢查數據遲延
+    # 檢查數據遲延，插入警示橫幅
     delay_warnings = []
     for i, ind in enumerate(analysis.get("indicators", [])):
         data_date_str = ind.get("data_date", "unknown")
@@ -598,7 +615,6 @@ def send_email(config: dict, html_content: str, analysis: dict,
             except Exception:
                 pass
 
-    # 在 HTML 最上方插入遲延警示橫幅
     if delay_warnings:
         banner = (
             '<div style="background:#fee2e2;color:#991b1b;padding:12px 16px;'
@@ -607,13 +623,21 @@ def send_email(config: dict, html_content: str, analysis: dict,
         )
         html_content = html_content.replace("<body>", f"<body>{banner}", 1)
 
-    subject = f"{config['output']['subject_prefix']} - {TODAY}"
+    # ── Email 主旨（v1.3 規範格式）──────────────────────────
+    now_tw = datetime.now(TZ_TAIWAN)
+    success = analysis.get("overall_credibility", "") != ""
+    status = "執行完畢" if success else "執行失敗"
+    subject = (
+        f"【GitHub】【01_verify.py】"
+        f"週246_04:00_{status}_"
+        f"{now_tw.strftime('%Y-%m-%d')}_{now_tw.strftime('%H:%M')}"
+    )
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = EMAIL_USER
     msg["To"] = RECEIVER_EMAIL
 
-    # 純文字備援（給不支援 HTML 的信箱用）
     plain_body = (
         f"[{task['name']}] 驗證報告 {TODAY}\n\n"
         f"整體可信度：{analysis.get('overall_credibility','尚未明朗')}\n"
