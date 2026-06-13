@@ -10,6 +10,7 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from google import genai
+from google.genai import types
 import yfinance as yf
 import matplotlib
 matplotlib.use("Agg")
@@ -274,28 +275,37 @@ def analyze_with_ai(config: dict, fetch_results: list) -> dict:
 """
 
     import json
-    try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-        )
-        text_content = response.text.strip()
-        if text_content.startswith("```"):
-            text_content = text_content.split("```")[1]
-            if text_content.startswith("json"):
-                text_content = text_content[4:]
-            text_content = text_content.strip()
-        return json.loads(text_content)
-    except Exception as e:
-        return {
-            "indicators": [
-                {"id": i+1, "data_date": "unknown",
-                 "trend": "解析失敗", "verdict": "尚未明朗", "conclusion": ""}
-                for i in range(len(indicators))
-            ],
-            "overall_credibility": "尚未明朗",
-            "overall_summary": f"AI 分析失敗：{str(e)}"
-        }
+    import time
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    tools=[types.Tool(google_search=types.GoogleSearch())]
+                )
+            )
+            text_content = response.text.strip()
+            if text_content.startswith("```"):
+                text_content = text_content.split("```")[1]
+                if text_content.startswith("json"):
+                    text_content = text_content[4:]
+                text_content = text_content.strip()
+            return json.loads(text_content)
+        except Exception as e:
+            if attempt < 2:
+                print(f"  ↳ Gemini 第{attempt+1}次失敗：{e}，30秒後重試...")
+                time.sleep(30)
+            else:
+                return {
+                    "indicators": [
+                        {"id": i+1, "data_date": "unknown",
+                         "trend": "解析失敗", "verdict": "尚未明朗", "conclusion": ""}
+                        for i in range(len(indicators))
+                    ],
+                    "overall_credibility": "尚未明朗",
+                    "overall_summary": f"AI 分析失敗：{str(e)}"
+                }
 
 
 # ── 更新歷史紀錄 ──────────────────────────────────────────
@@ -495,7 +505,7 @@ def generate_html_report(config: dict, fetch_results: list,
     validation = validate_output(
         data_dates=data_dates,
         today=TODAY,
-        max_date_diff_days=120,   # 季度數據容許較長落後
+        max_date_diff_days=120,
     )
     validation_html = build_validation_block(validation)
 
@@ -628,7 +638,7 @@ def send_email(config: dict, html_content: str, analysis: dict,
     success = analysis.get("overall_credibility", "") != ""
     status = "執行完畢" if success else "執行失敗"
     subject = (
-        f"【GitHub】【01_verify.py】"
+        f"【GitHub】【01_wu_trend_2026/01_verify.py】"
         f"週246_04:00_{status}_"
         f"{now_tw.strftime('%Y-%m-%d')}_{now_tw.strftime('%H:%M')}"
     )
