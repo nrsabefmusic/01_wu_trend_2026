@@ -1,6 +1,9 @@
 import os
 import csv
 import io
+import json
+import re
+import time
 import base64
 import yaml
 import requests
@@ -36,16 +39,16 @@ HISTORY_FILE = Path("history.csv")
 REPORT_FILE = Path("report.html")
 
 # ── Gemini 自動偵測可用模型 ────────────────────────────────
+# [修正1] 模型名稱加上 models/ 前綴，符合 §2-2 標準範本
 # gemini-1.5-flash 已永久下架（404），不放進清單
 PREFERRED_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-2.0-flash",
+    "models/gemini-2.5-flash",
+    "models/gemini-2.0-flash-lite",
+    "models/gemini-2.0-flash",
 ]
 
 def get_workable_model(client):
     """實際試打確認模型可用（quota 耗盡或 503 都會 fallback）"""
-    import time
     for model in PREFERRED_MODELS:
         try:
             response = client.models.generate_content(model=model, contents="hi")
@@ -63,10 +66,27 @@ def get_workable_model(client):
             else:
                 print(f"  ↳ {model} 不可用：{e}，嘗試下一個...")
     print("所有模型均不可用，使用最後備援")
-    return "gemini-2.0-flash-lite"
+    # [修正1] fallback 也要加 models/ 前綴
+    return "models/gemini-2.0-flash-lite"
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 GEMINI_MODEL = get_workable_model(client)
+
+
+# ── Gemini 生成內容的來源日期掃描（§2-5）─────────────────────
+def extract_cited_date(content: str) -> str:
+    """
+    從 Gemini 生成內容裡掃出所有「來源日期：YYYY-MM-DD」標注。
+    取最舊的那個，用來驗證是否有過期資料混入。
+    若完全沒有標注，fallback 掃全文所有 YYYY-MM-DD，取最舊。
+    """
+    matches = re.findall(r'(?:來源日期|情報日期)：(\d{4}-\d{2}-\d{2})', content)
+    if matches:
+        return sorted(matches)[0]
+    all_dates = re.findall(r'\d{4}-\d{2}-\d{2}', content)
+    if all_dates:
+        return sorted(all_dates)[0]
+    return "unknown"
 
 
 # ── 抓取各指標數據 ─────────────────────────────────────────
@@ -213,12 +233,14 @@ def analyze_with_ai(config: dict, fetch_results: list) -> dict:
                 for i, r in enumerate(fetch_results)
             ],
             "overall_credibility": "尚未明朗",
-            "overall_summary": "Gemini API 無可用模型，無法分析。"
+            "overall_summary": "Gemini API 無可用模型，無法分析。",
+            "ai_cited_date": "unknown",
         }
 
     task = config["task"]
     indicators = config["indicators"]
 
+    # [修正3] Prompt 要求 Gemini 標注每條資訊的來源日期（§2-5）
     prompt = f"""
 你是一個客觀的新聞言論驗證助理。
 
@@ -247,10 +269,10 @@ def analyze_with_ai(config: dict, fetch_results: list) -> dict:
 ---
 """
 
-    prompt += """
+    prompt += f"""
 請針對每個指標完成以下工作：
 1. 從原始內容中判讀這筆數據的「數據日期」（格式 YYYY-MM-DD，若無法判斷填 unknown）
-2. 說明目前數據顯示的趨勢（請具體說明數值）
+2. 說明目前數據顯示的趨勢（請具體說明數值），並在引用具體資訊時標注來源日期，格式：（來源日期：YYYY-MM-DD）
 3. 判斷是否符合原始預測：符合 / 不符合 / 尚未明朗
 4. 一句話結論
 
@@ -258,24 +280,28 @@ def analyze_with_ai(config: dict, fetch_results: list) -> dict:
 - 整體可信度評估（高 / 中 / 低 / 尚未明朗）
 - 整體說明（2-3句）
 
+格式要求：
+- 第一行必須是「情報日期：{TODAY}」
+- 每引用一條具體資訊時，在該句結尾標注「（來源日期：YYYY-MM-DD）」
+  例如：台積電收盤價為 950 元（來源日期：2026-06-13）
+- 若找不到某條資訊的明確日期，標注「（來源日期：不明）」
+
 請用以下 JSON 格式回答，不要有任何其他文字：
-{
+{{
   "indicators": [
-    {
+    {{
       "id": 1,
       "data_date": "YYYY-MM-DD 或 unknown",
-      "trend": "趨勢說明",
+      "trend": "趨勢說明（含來源日期標注）",
       "verdict": "符合 / 不符合 / 尚未明朗",
       "conclusion": "一句話結論"
-    }
+    }}
   ],
   "overall_credibility": "高 / 中 / 低 / 尚未明朗",
   "overall_summary": "整體說明"
-}
+}}
 """
 
-    import json
-    import time
     for attempt in range(3):
         try:
             response = client.models.generate_content(
@@ -286,12 +312,14 @@ def analyze_with_ai(config: dict, fetch_results: list) -> dict:
                 )
             )
             text_content = response.text.strip()
-            if text_content.startswith("```"):
-                text_content = text_content.split("```")[1]
-                if text_content.startswith("json"):
-                    text_content = text_content[4:]
-                text_content = text_content.strip()
-            return json.loads(text_content)
+            # 清除 Markdown 符號
+            clean = re.sub(r"```json|```", "", text_content).strip()
+            result = json.loads(clean)
+
+            # [修正3] 掃出 AI 回應中最舊的來源日期，供 validator 驗證
+            result["ai_cited_date"] = extract_cited_date(text_content)
+            return result
+
         except Exception as e:
             if attempt < 2:
                 print(f"  ↳ Gemini 第{attempt+1}次失敗：{e}，30秒後重試...")
@@ -304,7 +332,8 @@ def analyze_with_ai(config: dict, fetch_results: list) -> dict:
                         for i in range(len(indicators))
                     ],
                     "overall_credibility": "尚未明朗",
-                    "overall_summary": f"AI 分析失敗：{str(e)}"
+                    "overall_summary": f"AI 分析失敗：{str(e)}",
+                    "ai_cited_date": "unknown",
                 }
 
 
@@ -333,17 +362,28 @@ def update_history(fetch_results: list, analysis: dict):
                 except Exception:
                     pass
 
+            # [修正4] 先提取變數，不在 dict 裡用 get() 鏈
+            run_date_val = TODAY
+            indicator_id_val = ind_result.get("id", i+1)
+            metric_val = r.get("metric", "")
+            delay_val = "⚠️" if delay_warning else ""
+            verdict_val = ind_result.get("verdict", "")
+            trend_val = ind_result.get("trend", "")
+            conclusion_val = ind_result.get("conclusion", "")
+            credibility_val = analysis.get("overall_credibility", "")
+            value_val = r.get("value", "")
+
             writer.writerow({
-                "run_date": TODAY,
-                "indicator_id": ind_result.get("id", i+1),
-                "metric": r.get("metric", ""),
+                "run_date": run_date_val,
+                "indicator_id": indicator_id_val,
+                "metric": metric_val,
                 "data_date": data_date_str,
-                "delay_warning": "⚠️" if delay_warning else "",
-                "verdict": ind_result.get("verdict", ""),
-                "trend": ind_result.get("trend", ""),
-                "conclusion": ind_result.get("conclusion", ""),
-                "overall_credibility": analysis.get("overall_credibility", ""),
-                "value": r.get("value", ""),
+                "delay_warning": delay_val,
+                "verdict": verdict_val,
+                "trend": trend_val,
+                "conclusion": conclusion_val,
+                "overall_credibility": credibility_val,
+                "value": value_val,
             })
 
 
@@ -435,6 +475,7 @@ def generate_html_report(config: dict, fetch_results: list,
 
     indicator_rows = ""
     for ind in analysis.get("indicators", []):
+        # [修正4] 先提取變數，不在 f-string 內用 get() 鏈
         iid = str(ind["id"])
         hist = indicator_histories.get(iid, [])
         metric_name = next((x["metric"] for x in indicators
@@ -446,17 +487,25 @@ def generate_html_report(config: dict, fetch_results: list,
 
         rows_html = ""
         for h in reversed(hist[-30:]):
-            delay_badge = (f'<span class="badge warning">{h["delay_warning"]}</span>'
-                           if h.get("delay_warning") else "")
+            # [修正4] 先提取所有欄位到變數
+            h_run_date = h.get("run_date", "")
+            h_data_date = h.get("data_date", "")
+            h_delay = h.get("delay_warning", "")
+            h_verdict = h.get("verdict", "")
+            h_trend = h.get("trend", "")
+            h_conclusion = h.get("conclusion", "")
+
+            delay_badge = (f'<span class="badge warning">{h_delay}</span>'
+                           if h_delay else "")
             verdict_class = {"符合": "good", "不符合": "bad",
-                             "尚未明朗": "neutral"}.get(h.get("verdict", ""), "neutral")
+                             "尚未明朗": "neutral"}.get(h_verdict, "neutral")
             rows_html += f"""
             <tr>
-              <td>{h.get('run_date','')}</td>
-              <td>{h.get('data_date','')} {delay_badge}</td>
-              <td class="credibility {verdict_class}">{h.get('verdict','')}</td>
-              <td>{h.get('trend','')}</td>
-              <td>{h.get('conclusion','')}</td>
+              <td>{h_run_date}</td>
+              <td>{h_data_date} {delay_badge}</td>
+              <td class="credibility {verdict_class}">{h_verdict}</td>
+              <td>{h_trend}</td>
+              <td>{h_conclusion}</td>
             </tr>"""
 
         chart_html = ""
@@ -493,28 +542,48 @@ def generate_html_report(config: dict, fetch_results: list,
           </table>
         </div>"""
 
+    overall_credibility = analysis.get("overall_credibility", "尚未明朗")
+    overall_summary = analysis.get("overall_summary", "")
     credibility_class = {"高": "good", "中": "neutral", "低": "bad",
-                         "尚未明朗": "neutral"}.get(
-        analysis.get("overall_credibility", ""), "neutral")
+                         "尚未明朗": "neutral"}.get(overall_credibility, "neutral")
 
-    # ── 組裝驗證結果區塊 ──────────────────────────────────────
-    data_dates = {
-        r["metric"]: r["data_date"] if not r["error"] else None
-        for r in fetch_results
-    }
+    # ── 組裝 validate_output 的 data_dates（§12-3 dict 分別設定）──
+    # [修正2] 依指標更新頻率分別設定 max_date_diff_days
+    data_dates = {}
+    max_date_diff_days_dict = {}
+    for r in fetch_results:
+        metric = r["metric"]
+        data_dates[metric] = r["data_date"] if not r["error"] else None
+        max_date_diff_days_dict[metric] = r.get("max_delay_days", 120)
+
+    # [修正3] 把 Gemini 生成內容的最舊來源日期也納入驗證
+    ai_cited_date = analysis.get("ai_cited_date", "unknown")
+    data_dates["AI 分析來源日期"] = ai_cited_date
+    max_date_diff_days_dict["AI 分析來源日期"] = 3  # AI 分析應使用近期資料
+    max_date_diff_days_dict["default"] = 7
+
     validation = validate_output(
         data_dates=data_dates,
         today=TODAY,
-        max_date_diff_days=120,
+        max_date_diff_days=max_date_diff_days_dict,
     )
     validation_html = build_validation_block(validation)
+
+    task_name = task["name"]
+    task_statement = task["source_statement"]
+    task_person = task.get("source_person", "不明")
+    task_platform = task.get("source_platform", "不明")
+    task_date = task.get("source_date", "不明")
+    task_reason = task.get("tracking_reason", "")
+    task_created = task["created"]
+    task_until = task.get("tracking_until", "indefinite")
 
     html = f"""<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{task['name']} 驗證報告</title>
+  <title>{task_name} 驗證報告</title>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
            max-width: 960px; margin: 0 auto; padding: 24px;
@@ -560,16 +629,15 @@ def generate_html_report(config: dict, fetch_results: list,
     設定檔：topic_config.yaml
   </div>
 
-  <h1>🔍 {task['name']} 趨勢驗證報告</h1>
+  <h1>🔍 {task_name} 趨勢驗證報告</h1>
 
   <div class="meta">
-    <p><strong>原始言論：</strong>{task['source_statement']}</p>
-    <p><strong>發言人：</strong>{task.get('source_person','不明')} ／
-       <strong>來源：</strong>{task.get('source_platform','不明')} ／
-       <strong>發言日期：</strong>{task.get('source_date','不明')}</p>
-    <p><strong>追蹤背景：</strong>{task.get('tracking_reason','')}</p>
-    <p><strong>追蹤起迄：</strong>{task['created']} ～
-       {task.get('tracking_until','indefinite')}</p>
+    <p><strong>原始言論：</strong>{task_statement}</p>
+    <p><strong>發言人：</strong>{task_person} ／
+       <strong>來源：</strong>{task_platform} ／
+       <strong>發言日期：</strong>{task_date}</p>
+    <p><strong>追蹤背景：</strong>{task_reason}</p>
+    <p><strong>追蹤起迄：</strong>{task_created} ～ {task_until}</p>
   </div>
 
   <h2>📊 最新整體進度評估</h2>
@@ -577,11 +645,11 @@ def generate_html_report(config: dict, fetch_results: list,
               box-shadow:0 1px 3px rgba(0,0,0,0.05);">
     <p>言論整體可信度：
       <span class="credibility {credibility_class}">
-        {analysis.get('overall_credibility','尚未明朗')}
+        {overall_credibility}
       </span>
     </p>
     <p style="color:#374151;font-size:0.95rem;line-height:1.5;margin-top:8px;">
-      {analysis.get('overall_summary','')}
+      {overall_summary}
     </p>
   </div>
 
@@ -634,13 +702,17 @@ def send_email(config: dict, html_content: str, analysis: dict,
         html_content = html_content.replace("<body>", f"<body>{banner}", 1)
 
     # ── Email 主旨（v1.3 規範格式）──────────────────────────
+    # [修正5] success 改為判斷 overall_summary 是否包含失敗訊息
     now_tw = datetime.now(TZ_TAIWAN)
-    success = analysis.get("overall_credibility", "") != ""
-    status = "執行完畢" if success else "執行失敗"
+    overall_summary = analysis.get("overall_summary", "")
+    has_error = "失敗" in overall_summary or analysis.get("overall_credibility", "") == ""
+    status = "執行失敗" if has_error else "執行完畢"
+
+    date_str = now_tw.strftime("%Y-%m-%d")
+    actual_time = now_tw.strftime("%H:%M")
     subject = (
         f"【GitHub】【01_wu_trend_2026/01_verify.py】"
-        f"週246_04:00_{status}_"
-        f"{now_tw.strftime('%Y-%m-%d')}_{now_tw.strftime('%H:%M')}"
+        f"週246_04:00_{status}_{date_str}_{actual_time}"
     )
 
     msg = MIMEMultipart("alternative")
@@ -648,10 +720,13 @@ def send_email(config: dict, html_content: str, analysis: dict,
     msg["From"] = EMAIL_USER
     msg["To"] = RECEIVER_EMAIL
 
+    # [修正4] 先提取變數
+    task_name = task["name"]
+    credibility_val = analysis.get("overall_credibility", "尚未明朗")
     plain_body = (
-        f"[{task['name']}] 驗證報告 {TODAY}\n\n"
-        f"整體可信度：{analysis.get('overall_credibility','尚未明朗')}\n"
-        f"{analysis.get('overall_summary','')}\n\n"
+        f"[{task_name}] 驗證報告 {TODAY}\n\n"
+        f"整體可信度：{credibility_val}\n"
+        f"{overall_summary}\n\n"
         + "\n".join(
             f"【指標 {ind.get('id')}】{ind.get('verdict','')}：{ind.get('conclusion','')}"
             for ind in analysis.get("indicators", [])
