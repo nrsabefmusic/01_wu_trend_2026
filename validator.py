@@ -1,16 +1,20 @@
 # validator.py
 # 腳本自我驗證共用函式庫
+# 版本：v1.1
+#
 # 路徑（桌機版）：C:\Users\st99\OneDrive\For_check_result\Scripts\validator.py
+# 路徑（GitHub版）：每個 repo 根目錄各放一份
 #
 # 使用方式：
-#   import sys
-#   sys.path.append(r"C:\Users\st99\OneDrive\For_check_result\Scripts")
 #   from validator import validate_output, build_validation_block, VALIDATOR_VERSION
+#
+# v1.0 → v1.1 更新：
+#   max_date_diff_days 支援 dict（每個指標設不同門檻），向下相容數字（套用全部指標）
 
 from datetime import datetime, date, timedelta
-from typing import Optional
+from typing import Optional, Union
 
-VALIDATOR_VERSION = "v1.0"
+VALIDATOR_VERSION = "v1.1"
 
 
 def _parse_date(date_str: str) -> Optional[date]:
@@ -33,7 +37,7 @@ def _parse_date(date_str: str) -> Optional[date]:
 def validate_output(
     data_dates: dict,
     today: str,
-    max_date_diff_days: int = 3,
+    max_date_diff_days: Union[int, dict] = 3,
     expected_keywords: Optional[list] = None,
     email_content: Optional[str] = None,
 ) -> dict:
@@ -41,11 +45,18 @@ def validate_output(
     驗證腳本產出的數據品質。
 
     參數：
-        data_dates        dict，key 為指標名稱，value 為日期字串（YYYY-MM-DD 或 YYYY-MM）或 None（抓取失敗）
-        today             今天日期，格式 YYYY-MM-DD
-        max_date_diff_days  允許的最大數據落後天數（月度數據建議設 45）
-        expected_keywords 預期出現在 email_content 裡的關鍵字清單（選填）
-        email_content     email HTML 字串，僅用於關鍵字檢查（選填）
+        data_dates          dict，key 為指標名稱，value 為日期字串（YYYY-MM-DD 或 YYYY-MM）或 None（抓取失敗）
+        today               今天日期，格式 YYYY-MM-DD
+        max_date_diff_days  允許的最大數據落後天數。
+                            - 傳入整數：套用到所有指標（向下相容）
+                            - 傳入 dict：每個指標各自設定，未指定的指標 fallback 到 dict 裡的
+                              "default" key，若無 "default" 則用 3
+                            範例：
+                              3                              # 全部套用 3 天
+                              {"股價": 3, "月度報告": 45}     # 各自設定
+                              {"股價": 3, "default": 7}      # 股價 3 天，其餘 7 天
+        expected_keywords   預期出現在 email_content 裡的關鍵字清單（選填）
+        email_content       email HTML 字串，僅用於關鍵字檢查（選填）
 
     回傳：
         驗證結果 dict，可直接傳入 build_validation_block()
@@ -53,7 +64,17 @@ def validate_output(
     today_date = _parse_date(today)
     anomalies = []
 
-    # ── 1. 完整度：統計 None 的指標 ──────────────────────────────────────
+    # ── 解析 max_date_diff_days ───────────────────────────────────────
+    def get_threshold(key: str) -> int:
+        if isinstance(max_date_diff_days, int):
+            return max_date_diff_days
+        if isinstance(max_date_diff_days, dict):
+            if key in max_date_diff_days:
+                return max_date_diff_days[key]
+            return max_date_diff_days.get("default", 3)
+        return 3
+
+    # ── 1. 完整度：統計 None 的指標 ──────────────────────────────────
     total = len(data_dates)
     missing = [k for k, v in data_dates.items() if v is None]
     missing_count = len(missing)
@@ -71,7 +92,7 @@ def validate_output(
         completeness_ok = False
         anomalies.append(f"以下指標抓取失敗：{', '.join(missing)}")
 
-    # ── 2. 時效性：比對每個有日期的指標 ──────────────────────────────────
+    # ── 2. 時效性：比對每個有日期的指標 ──────────────────────────────
     timeliness_ok = True
     oldest_date = None
     oldest_key = None
@@ -85,9 +106,10 @@ def validate_output(
             anomalies.append(f"{key} 日期格式無法解析：{val}")
             timeliness_ok = False
             continue
+        threshold = get_threshold(key)
         diff = (today_date - d).days
-        if diff > max_date_diff_days:
-            late_items.append(f"{key} 落後 {diff} 天（{val}）")
+        if diff > threshold:
+            late_items.append(f"{key} 落後 {diff} 天（{val}，門檻 {threshold} 天）")
             timeliness_ok = False
         if oldest_date is None or d < oldest_date:
             oldest_date = d
@@ -114,13 +136,13 @@ def validate_output(
     else:
         timeliness = f"正常（最舊：{oldest_diff} 天，{oldest_key}）" if oldest_diff is not None else "正常"
 
-    # ── 3. 關鍵字檢查（選填）────────────────────────────────────────────
+    # ── 3. 關鍵字檢查（選填）────────────────────────────────────────
     if expected_keywords and email_content:
         missing_kw = [kw for kw in expected_keywords if kw not in email_content]
         if missing_kw:
             anomalies.append(f"預期關鍵字未出現：{', '.join(missing_kw)}")
 
-    # ── 4. 組裝回傳結果 ──────────────────────────────────────────────────
+    # ── 4. 組裝回傳結果 ──────────────────────────────────────────────
     anomaly_str = "；".join(anomalies) if anomalies else "無"
 
     return {
